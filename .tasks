@@ -1,0 +1,35 @@
+[project-build]
+command=./ulk kernel=6.9.6
+cwd=<root>
+output=terminal
+errorformat=%f(%l):%m
+
+[project-run]
+command=./scripts/gdb
+cwd=<root>
+output=terminal
+errorformat=%f(%l):%m
+
+[project-connect]
+command=./scripts/connect
+cwd=<root>
+output=terminal
+errorformat=%f(%l):%m
+
+[build-modules]
+command=make modules
+cwd=<root>
+output=terminal
+errorformat=%f(%l):%m
+
+[build-debug-module]
+command=make debug-module
+cwd=<root>
+output=terminal
+errorformat=%f(%l):%m
+
+[build-userspace]
+command=make userspace
+cwd=<root>
+output=terminal
+errorformat=%f(%l):%m

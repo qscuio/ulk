@@ -1,0 +1,5 @@
+#!/bin/bash
+
+ssh-keygen -f "$HOME/.ssh/known_hosts" -R "10.10.10.1" 2>/dev/null
+
+ssh -i *.id_rsa 10.10.10.1 -o StrictHostKeyChecking=no 

@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# Get the list of currently loaded modules
+modules=$(lsmod | awk 'NR>1 {print $1}')
+
+# Loop through each module and remove it
+for module in $modules; do
+    echo "Removing module: $module"
+    sudo rmmod "$module"
+    if [ $? -eq 0 ]; then
+        echo "Successfully removed $module"
+    else
+        echo "Failed to remove $module"
+    fi
+done
+
+echo "All modules removed."
+

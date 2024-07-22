@@ -1,0 +1,266 @@
+#!/bin/bash
+
+top=`pwd`
+
+ARCH=
+AARCH=
+CROSS_COMPILE=
+KERNEL_VERSION=
+EXTRA_CFLAGS="-g3"
+#RELEASE=bullseye
+RELEASE=jammy
+IMAGE=
+MIRROR=
+
+validate_arch() {
+    local arch=$1
+    if [[ "$arch" == "x86_64" ]]; then 
+	IMAGE=bzImage
+	AARCH=$arch
+	return 0
+    elif [[ "$arch" == "arm64" ]]; then
+	IMAGE=Image.gz
+	CROSS_COMPILE=aarch64-linux-gnu-
+	AARCH=aarch64
+        return 0  # Valid
+    else
+	echo "Invalid arch=$arch"
+	exit 0
+    fi
+}
+
+do_prepare_job() {
+    if [ ! -f $top/.prepare ]; then
+	# Enable ARP proxy on LAN interface, int this case we can connect
+	# LAN network from guest OS.
+	interface=$(ip route | grep default | awk '{print $5}')
+	sudo sysctl -w net.ipv4.conf.$interface.proxy_arp=1 
+
+	ulimit -c unlimited
+	mkdir -p $top/cores
+	sudo sysctl -w kernel.core_pattern=$top/cores/core-%e-%p-%t.core
+
+	# For brctl and tunctl
+	sudo apt-get -y install vim make qemu bc
+	sudo apt-get -y install bridge-utils
+	sudo apt-get -y install uml-utilities
+	sudo apt-get -y install golang
+	sudo apt-get -y install mtools
+	sudo apt-get -y install ssh
+	sudo apt-get -y install dwarves # for pahole
+	sudo apt-get -y install git
+	sudo apt-get -y install gdb-multiarch
+	sudo apt-get -y install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu qemu-system-aarch64
+
+	touch $top/.prepare
+    fi
+}
+
+do_build_prepare_job() {
+
+    validate_arch $1
+
+    rm -rf .arch
+    rm -rf .kernel_version
+    echo $1 > .arch
+    echo $2 > .kernel_version
+
+    mkdir -p $top/tools
+    mkdir -p $top/tar
+    mkdir -p $top/kernel
+    mkdir -p $top/build
+}
+
+do_get_major_minor_version() {
+    input_version=$1
+    major_version=$(echo $input_version | awk -F '.' '{print $1}')
+    minor_version=$(echo $input_version | awk -F '.' '{print $2}')
+
+    if [ "$major_version" -gt 3 ]; then
+	echo "v$major_version.x"
+    else
+	echo "v$major_version.$minor_version"
+    fi
+}
+
+apply_patch_by_name() {
+    local patch_name="$1"
+
+    if [ -z "$patch_name" ]; then
+        echo "Error: Patch file name not provided."
+        return 1
+    fi
+
+    if [ ! -f "$patch_name" ]; then
+        echo "Error: Patch file '$patch_name' not found."
+        return 1
+    fi
+
+    patch -p0 < "$patch_name"
+    local ret=$?
+
+    if [ $ret -ne 0 ]; then
+        echo "Failed to apply patch '$patch_name'. Exit code: $ret"
+    else
+        echo "Patch '$patch_name' applied successfully."
+    fi
+
+    return $ret
+}
+
+for arg in "$@"
+do
+    case $arg in
+        *=*)
+	    if [[ "${arg%%=*}" == "arch" ]]; then
+		ARCH=${arg#*=}
+	    elif [[ "${arg%%=*}" == "kernel" ]]; then
+		KERNEL_VERSION=${arg#*=}
+	    fi
+	    ;;
+        *)
+            echo "Invalid argument format: $arg"
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z "$ARCH" ]; then
+    ARCH=x86_64
+fi
+
+if [ -z "$KERNEL_VERSION" ]; then
+    KERNEL_VERSION=6.4.3
+fi
+
+do_prepare_job
+do_build_prepare_job $ARCH $KERNEL_VERSION
+
+
+echo "Start building for ARCH=$ARCH KERNEL_VERSION=$KERNEL_VERSION RELEASE=$RELEASE"
+
+MAJOR_MINOR=$(do_get_major_minor_version $KERNEL_VERSION)
+
+# Get kernel source code
+if [ ! -d $top/tar/linux-$KERNEL_VERSION ]; then
+    pushd "$top/tar" || { echo "Failed to navigate to $top/tar"; exit 1; }
+    curl -o linux-$KERNEL_VERSION.tar.xz https://cdn.kernel.org/pub/linux/kernel/$MAJOR_MINOR/linux-$KERNEL_VERSION.tar.xz \
+	&& tar -xf linux-$KERNEL_VERSION.tar.xz 
+    popd || { echo "Failed to return to the previous directory"; exit 1; }
+
+    # Remove the old link
+    if [ -d $top/kernel/linux ]; then
+	rm -rf $top/kernel/lib
+	rm -rf $top/kernel/linux
+	rm -rf $top/kernel/include
+    fi
+fi
+
+if [ ! -d $top/kernel/linux ]; then
+    pushd "$top/kernel" || { echo "Failed to navigate to $top/kernel"; exit 1; }
+    cp -a $top/tar/linux-$KERNEL_VERSION .
+    ln -sf linux-$KERNEL_VERSION linux
+    popd || { echo "Failed to return to the previous directory"; exit 1; }
+    apply_patch_by_name "patch/linux-$KERNEL_VERSION/kernel.patch"
+fi
+
+# crash is a useful tool to debug linux kernel.
+# Here we only download the code of crash and gdb.
+# We need build crash in the guest system.
+# 
+# After login to the guest OS:
+# 
+# 1.  cd /root/shared/crash && make && make extensions
+# 2.  crash /root/shared/build/vmlinux /proc/kcore      ## /snapshort
+# 3.  crash /root/shared/build/vmlinux /dev/mem         ## /live system
+# 4.  extend extensions cacheutils.so
+# 5.  extend extensions page_owner.so
+# 
+
+if [ ! -d $top/crash ]; then
+    git clone https://github.com/crash-utility/crash.git
+
+    pushd "$top/crash" || { echo "Failed to navigate to $top/crash"; exit 1; }
+    make configure
+    make gdb_files
+    make gdb_unzip
+    cp -af $top/scripts/crash/* $top/crash/extensions/
+    popd || { echo "Failed to return to the previous directory"; exit 1; }
+fi
+
+if [ ! -f build/.config ]; then
+    # Enable some default configuration.
+    pushd "$top/kernel/linux-$KERNEL_VERSION" || { echo "Failed to navigate to $top/linux-$KERNEL_VERSION"; exit 1; }
+    make O=$top/build ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE defconfig
+    cp -af $top/configs/$ARCH/defconfig $top/build/.config
+    popd || { echo "Failed to navigate to $top"; exit 1; }
+    sed -i 's:.*CONFIG_KGDB.*:CONFIG_KGDB=y:' $top/build/.config
+    sed -i 's:.*CONFIG_IKHEADERS.*:CONFIG_IKHEADERS=y:' $top/build/.config
+    sed -i 's:.*CONFIG_KCOV.*:CONFIG_KCOV=y:' $top/build/.config
+    sed -i 's:.*CONFIG_PAGE_OWNER.*:CONFIG_PAGE_OWNER=y:' $top/build/.config
+    sed -i 's:.*CONFIG_DEBUG_INFO.*:CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y:' $top/build/.config
+    # sed -i 's:.*CONFIG_KASAN.*:CONFIG_KASAN=y:' $top/build/.config
+    # sed -i 's:.*CONFIG_KASAN_INLINE.*:CONFIG_KASAN_INLINE=y:' $top/build/.config
+    sed -i 's:.*CONFIG_CONFIGFS_FS.*:CONFIG_CONFIGFS_FS=y:' $top/build/.config
+    sed -i 's:.*CONFIG_SECURITYFS.*:CONFIG_SECURITYFS=y:' $top/build/.config
+    # sed -i 's:.*CONFIG_STACK_TRACER.*:CONFIG_STACK_TRACER=y:' $top/build/.config
+    sed -i 's:.*CONFIG_FUNCTION_TRACER.*:CONFIG_FUNCTION_TRACER=y:' $top/build/.config
+    # sed -i 's:.*CONFIG_PREEMPT_TRACER.*:CONFIG_PREEMPT_TRACER=y:' $top/build/.config
+    # sed -i 's:.*CONFIG_SCHED_TRACER.*:CONFIG_SCHED_TRACER=y:' $top/build/.config
+    sed -i 's:.*CONFIG_FTRACE_SYSCALLS.*:CONFIG_FTRACE_SYSCALLS=y:' $top/build/.config
+    sed -i 's:.*CONFIG_LOCK_STAT.*:CONFIG_LOCK_STAT=y:' $top/build/.config
+    # sed -i 's:.*CONFIG_PROVE_LOCKING.*:CONFIG_PROVE_LOCKING=y:' $top/build/.config
+    # sed -i 's:.*CONFIG_DEBUG_SPINLOCK.*:CONFIG_DEBUG_SPINLOCK=y:' $top/build/.config
+    # sed -i 's:.*CONFIG_DEBUG_MUTEXES.*:CONFIG_DEBUG_MUTEXES=y:' $top/build/.config
+    sed -i 's:.*CONFIG_RANDOMIZE_BASE.*:# CONFIG_RANDOMIZE_BASE is not set:' $top/build/.config
+    sed -i 's:.*CONFIG_DRM_I915.*:# CONFIG_DRM_I915 is not set:' $top/build/.config
+fi
+
+pushd "$top/kernel/linux-$KERNEL_VERSION" || { echo "Failed to navigate to $top/linux-$KERNEL_VERSION"; exit 1; }
+
+make O=$top/build ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE EXTRA_CFLAGS=$EXTRA_CFLAGS savedefconfig
+make O=$top/build ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE EXTRA_CFLAGS=$EXTRA_CFLAGS $IMAGE -j8
+
+if [ ! -d $top/kernel/include ]; then
+    make O=$top/build ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE EXTRA_CFLAGS=$EXTRA_CFLAGS INSTALL_HDR_PATH=$top/kernel headers_install -j8
+fi
+
+# Out of source code module cannot compile if this is not included.
+make O=$top/build ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE EXTRA_CFLAGS=$EXTRA_CFLAGS modules -j8
+make O=$top/build ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE EXTRA_CFLAGS=$EXTRA_CFLAGS INSTALL_MOD_PATH=$top/kernel modules_install -j8
+make O=$top/build ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE EXTRA_CFLAGS=$EXTRA_CFLAGS scripts_gdb -j8
+
+popd || { echo "Failed to navigate to $top"; exit 1; }
+
+if [ "$ARCH" != "arm64" ]; then
+   make all ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE
+fi
+
+if [ "$RELEASE" != "bullseye" ]; then
+    MIRROR="-m"
+fi
+
+if [ "$ARCH" != "arm64" ]; then
+    . scripts/create-image.sh -a $AARCH -p $MIRROR -d $RELEASE
+else
+    . scripts/create-image.sh -a $AARCH -d $MIRROR $RELEASE
+fi
+
+. scripts/boot.sh $AARCH $RELEASE
+
+# RUN apt-get update
+# RUN apt-get -y install vim make
+#
+# Qemu commands
+#
+# C-a h    print this help
+# C-a x    exit emulator
+# C-a s    save disk data back to file (if -snapshot)
+# C-a t    toggle console timestamps
+# C-a b    send break (magic sysrq)
+# C-a c    switch between console and monitor
+# C-a C-a  sends C-a
+
+# If debootstrap run failed
+# sudo rm -rf chroot/{bin,sbin,lib,lib32,lib64,libx32,etc,usr,tmp,sys,srv,dev,mnt,proc,opt,run,home,boot}
+# and check chroot/debootstrap/debootstrap.log

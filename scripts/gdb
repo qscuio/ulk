@@ -1,0 +1,96 @@
+#!/bin/bash
+
+cp .gdbinit build/
+cd build && gdb-multiarch vmlinux -iex 'set auto-load safe-path /'
+
+
+#  examine: inspect memory contents
+#    x/nfu addr
+#      n: count
+#      f: format
+#      u: unit size
+#  step/next/finish
+#    step: next line of C code
+#    next: next line of C code, skipping over function calls
+#    finish: continue executing until end of current function call
+#  stepi/nexti
+#    stepi: next assembly instruction
+#    nexti: next assembly instruction, skipping over function calls
+#  layout next
+#    steps through layouts
+#  conditional breakpoints
+#    break, only when a condition holds (e.g. variable has a certain value)
+#  watchpoints
+#    break when a memory location changes value
+#  GDB is a very powerful tool
+#    Read the manual for more!
+#    But you probably don't need all the fancy features for this class
+#
+# GDB
+#    break __libc_start_main
+#    break *0x12345678 // given address from radare2 or something
+#    run
+#  Instructions
+#    si/stepi (until different instruction)
+#    ni/nexti (until next instruction; don't enter calls)
+#    finish (finish this call)
+#    u/until location
+#    nextcall (pwndbg)
+#  Source lines (rare)
+#    c/continue (until next breakpoint)
+#    s/step (until different line)
+#    n/next (until next line; don't enter calls)
+#    u/until (until numerically next line, so if you're at the end of a loop, runs until after it)
+#  Breaking
+#    break label / break *0x12345678
+#    break label if comdition
+#    tbreak: as above but delete the breakpoint after broken at
+#    clear label / clear *0x12345789
+#    clear (clear breakpoint at current location)
+#    i b/info break (list breakpoints)
+#    d/delete [num] (delete nth breakpoint from i b or ALL breakpoints)
+#    dis/disable [num] (disable nth breakpoint or all)
+#    enable [num] (enable nth breakpoint or all)
+#  Examining
+#    p/print expr (link):
+#    	Keeps history in magic variables $1, $2, etc. or in reverse order, $, $$, $$2, $$3, etc.
+#    	expr can be/have an assignment expression or a function call or whatever.
+#    print /f expr: f = t(!), o, u/d, x/z for base 2, 8, 10 (unsigned/signed), 16 (direct/zero-padded); a for address, c for character, s for string, f for float
+#    x/[number][format][unit]
+#    	number: 10 (bytes, say)
+#    	format: like print /f e.g. x for hex
+#    	unit: b = byte, h = halfword (two bytes), w = word, g = "giant word" (eiGht bytes)
+#    	Keeps historical address in $_, value in $__
+#    x/s: string
+#    display/10i $eip
+#    set disassembly-flavor intel; disasssemble main/disas main
+#    find:
+#    	find start_addr, +len, val
+#    	find start_addr, end_addr, val
+#    	strings will include trailing \0, get around by casting {char[5]}"hello"
+#    i r/info registers (inspect registers; or try voltron view registers from another window)
+#    info functions
+#    info proc mappings (has heap ptr etc)
+#    vmmap (has heap ptr etc)
+#  Writing
+#    set var is safer because set has subcommands e.g. set g=4 is set gnutarget =4
+#    set $esp += 4
+#    set {int}0x12345 = 4
+#    set {int}0x12345 = 4
+#  Hacking
+#    j/jump location
+#    return [expr]
+#    call expr
+#    set write on / set write off (needs reopen file)
+#    Watchpoint
+#    watch expr (break when expr is written)
+#    rwatch expr (break when expr is read)
+#    awatch expr (break when expr is read or written)
+#    Use the same commands as breakpoints to query/delete/disable/enable: i b/info breakpoints, d/delete [num], dis/disable [num], enable [num].
+#
+#    There's a hardware limit on how many hardware watchpoints you can set. You can make GDB use software watchpoints with set can-use-hw-watchpoints 0 but it is very slow.
+#
+#  Config
+#    config (pwndbg tells you what you can config)
+#    set context-sections 'disasm' (if you're using voltron for other sections; default is 'regs disasm code stack backtrace')
+#    set $base = 0x555555554000

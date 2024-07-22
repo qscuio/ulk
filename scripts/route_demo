@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# Function to configure IPv4 route entries
+configure_ipv4_routes() {
+    # Example IPv4 routes
+    sudo ip route add 123.50.1.0/24 via 10.10.10.254 dev eth01
+    sudo ip route add 123.60.1.0/24 via 10.10.10.254 dev eth01
+    sudo ip route add 123.100.1.0/24 via 10.10.10.254 dev eth01
+    sudo ip route add 123.100.1.0/24 via 10.20.20.254 dev eth02
+    sudo ip route add 123.200.1.0/24 via 10.10.10.254 dev eth01
+    sudo ip route add 123.200.1.0/24 via 10.20.20.254 dev eth02
+
+    echo "IPv4 routes configured."
+}
+
+# Function to configure IPv6 route entries
+configure_ipv6_routes() {
+    # Example IPv6 routes
+    sudo ip -6 route add 2001:123:50::/64 via 2001:db8:10::254 dev eth01
+    sudo ip -6 route add 2001:123:60::/64 via 2001:db8:10::254 dev eth01
+    sudo ip -6 route add 2001:123:100::/64 via 2001:db8:10::254 dev eth01
+    sudo ip -6 route add 2001:123:100::/64 via 2001:db8:20::254 dev eth02
+    sudo ip -6 route add 2001:123:200::/64 via 2001:db8:10::254 dev eth01
+    sudo ip -6 route add 2001:123:200::/64 via 2001:db8:20::254 dev eth02
+    echo "IPv6 routes configured."
+}
+
+# Function to clear IPv4 route entries, excluding default and connected routes
+clear_ipv4_routes() {
+    sudo ip route flush cache
+    for route in $(ip route show | grep "123" | awk '{print $1}')
+    do
+        sudo ip route del $route
+    done
+
+    echo "IPv4 routes cleared."
+}
+
+# Function to clear IPv6 route entries, excluding default and connected routes
+clear_ipv6_routes() {
+    sudo ip -6 route flush cache
+    for route in $(ip -6 route show | grep "123" | awk '{print $1}')
+    do
+        sudo ip -6 route del $route
+    done
+
+    echo "IPv6 routes cleared."
+}
+
+# Main script
+if [ "$1" == "-c" ]; then
+    if [ "$2" == "ipv4" ]; then
+        clear_ipv4_routes
+    elif [ "$2" == "ipv6" ]; then
+        clear_ipv6_routes
+    else
+        clear_ipv4_routes
+        clear_ipv6_routes
+    fi
+else
+    configure_ipv4_routes
+    configure_ipv6_routes
+fi
+
